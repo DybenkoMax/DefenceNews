@@ -21,30 +21,30 @@ HEADERS = {
 def parse_news(url):
     try:
         response = requests.get(url, headers=HEADERS, timeout=10)
-        response.raise_for_status()  # Перевіряємо, чи запит успішний
+        response.raise_for_status()
         
-        # Логуємо тип вмісту для діагностики
         content_type = response.headers.get('content-type', 'невідомий')
         if 'text/html' not in content_type:
             raise Exception(f"Неправильний тип вмісту: {content_type}")
         
         soup = BeautifulSoup(response.text, 'html.parser')
         
-        # Витягуємо заголовок
         title = soup.find('h1').text.strip() if soup.find('h1') else "Без заголовка"
-        
-        # Витягуємо текст (перший параграф)
         text = soup.find('p').text.strip() if soup.find('p') else "Текст відсутній"
-        
-        # Витягуємо перше зображення
         image = soup.find('img')
         image_url = image['src'] if image and 'src' in image.attrs else None
         
-        # Перевіряємо, чи URL зображення абсолютний
-        if image_url and not image_url.startswith('http'):
+        if image_url:
             from urllib.parse import urljoin
+            # Перетворюємо відносний URL на абсолютний
             image_url = urljoin(url, image_url)
+            # Перевіряємо доступність зображення
+            img_response = requests.head(image_url, headers=HEADERS, timeout=5)
+            if img_response.status_code != 200 or 'image' not in img_response.headers.get('content-type', ''):
+                print(f"Недоступне або невалідне зображення: {image_url}")
+                image_url = None
         
+        print(f"Parsed image_url: {image_url}")  # Логування для дебагу
         return title, text, image_url
     except requests.exceptions.RequestException as e:
         raise Exception(f"Помилка запиту до сайту: {str(e)}")
@@ -56,28 +56,33 @@ def adapt_news(title, text):
     adapted_text = f"⚡️ {title.upper()} ⚡️\n\nОсь що сталося: {text}.\nТримайте руку на пульсі з @UA_Defence!"
     return adapted_text
 
+# Обробка помилок
+async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    error = context.error
+    error_msg = f"Виникла помилка: {str(error)}"
+    print(error_msg)  # Логування в консоль
+    if update:
+        await update.message.reply_text(error_msg)
+
 # Обробка повідомлень з посиланням
 async def handle_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
     url = update.message.text
-    # Перевірка на Facebook-посилання
     if "facebook.com" in url.lower():
         await update.message.reply_text("Парсинг посилань із Facebook не підтримується через обмеження доступу.")
         return
     
     try:
-        # Парсимо новину
         title, text, image_url = parse_news(url)
-        
-        # Адаптуємо текст
         adapted_message = adapt_news(title, text)
         
         # Надсилаємо в канал
         if image_url:
+            print(f"Спроба надіслати фото: {image_url}")
             await bot.send_photo(chat_id=CHANNEL_ID, photo=image_url, caption=adapted_message)
         else:
+            print("Зображення відсутнє, надсилаємо лише текст")
             await bot.send_message(chat_id=CHANNEL_ID, text=adapted_message)
         
-        # Повідомляємо користувача
         await update.message.reply_text("Новину опубліковано на @UA_Defence!")
     except Exception as e:
         await update.message.reply_text(f"Помилка: {str(e)}")
@@ -88,17 +93,14 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # Головна функція
 def main():
-    # Ініціалізація Application
     application = Application.builder().token(TOKEN).build()
     
-    # Команда /start
+    application.add_error_handler(error_handler)
     application.add_handler(CommandHandler("start", start))
-    
-    # Обробка текстових повідомлень (посилань)
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_link))
     
-    # Запуск бота
-    application.run_polling()
+    print("Бот запущений...")
+    application.run_polling(allowed_updates=Update.ALL_TYPES)
 
 if __name__ == '__main__':
     main()
