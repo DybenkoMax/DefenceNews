@@ -1,6 +1,7 @@
 import requests
 from bs4 import BeautifulSoup
 import telegram
+import facebook
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, filters, ContextTypes
 
@@ -8,25 +9,23 @@ from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQu
 TOKEN = "7765035282:AAE-389fgYGvbuxLhTc6suUzHDwad6nb0IA"
 # ID каналу
 CHANNEL_ID = "@UA_Defence"
+# Довготривалий токен доступу до Facebook Graph API
+FB_ACCESS_TOKEN = "561800113604160|EPehld3ho74dBE0NsJTIr6UEfwg"
 
-# Ініціалізація бота
+# Ініціалізація бота та Facebook API
 bot = telegram.Bot(token=TOKEN)
+graph = facebook.GraphAPI(access_token=FB_ACCESS_TOKEN)
 
 # Заголовки для імітації браузера
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
 }
 
-# Функція для парсингу новини
-def parse_news(url):
+# Функція для парсингу звичайних сайтів
+def parse_web_news(url):
     try:
         response = requests.get(url, headers=HEADERS, timeout=10)
         response.raise_for_status()
-        
-        content_type = response.headers.get('content-type', 'невідомий')
-        if 'text/html' not in content_type:
-            raise Exception(f"Неправильний тип вмісту: {content_type}")
-        
         soup = BeautifulSoup(response.text, 'html.parser')
         
         title = soup.find('h1').text.strip() if soup.find('h1') else "Без заголовка"
@@ -40,26 +39,39 @@ def parse_news(url):
             image_url = urljoin(url, image_url)
             img_response = requests.head(image_url, headers=HEADERS, timeout=5)
             if img_response.status_code != 200 or 'image' not in img_response.headers.get('content-type', ''):
-                print(f"Недоступне зображення: {image_url}")
                 image_url = None
         
-        print(f"Parsed: title={title}, text={text[:100]}..., image_url={image_url}")
         return title, text, image_url
-    except requests.exceptions.RequestException as e:
-        raise Exception(f"Помилка запиту до сайту: {str(e)}")
     except Exception as e:
-        raise Exception(f"Помилка парсингу: {str(e)}")
+        raise Exception(f"Помилка парсингу сайту: {str(e)}")
+
+# Функція для парсингу постів із Facebook
+def parse_facebook_post(url):
+    try:
+        # Витягуємо ID поста з URL
+        post_id = url.split("posts/")[1].split("?")[0] if "posts/" in url else url.split("/")[-1]
+        post = graph.get_object(id=post_id, fields='message,full_picture,created_time')
+        
+        title = "Новина з Facebook"
+        text = post.get('message', 'Текст відсутній')
+        image_url = post.get('full_picture', None)
+        
+        return title, text, image_url
+    except facebook.GraphAPIError as e:
+        raise Exception(f"Помилка Facebook API: {str(e)}")
+    except Exception as e:
+        raise Exception(f"Помилка парсингу Facebook: {str(e)}")
 
 # Функція для аналізу та створення висновків
 def analyze_content(title, text):
     analysis = ""
     if "війна" in title.lower() or "війна" in text.lower():
-        analysis += "Тема пов'язана з війною. Рекомендується звернути увагу на достовірність джерел та емоційний вплив на читачів.\n"
+        analysis += "Тема пов'язана з війною. Рекомендується перевірити джерела.\n"
     if len(text) < 200:
-        analysis += "Текст дуже короткий. Можливо, варто додати більше деталей для повноти картини.\n"
+        analysis += "Текст короткий. Додайте більше деталей.\n"
     else:
-        analysis += "Текст достатньо інформативний. Рекомендується виділити ключові моменти.\n"
-    analysis += "Моє бачення: Подія потребує додаткового контексту для читачів каналу."
+        analysis += "Текст інформативний. Виділіть ключові моменти.\n"
+    analysis += "Висновок: Подія потребує контексту для читачів."
     return analysis
 
 # Функція для підготовки поста
@@ -77,28 +89,24 @@ def prepare_post(title, text, image_url, url):
 # Обробка помилок
 async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     error = context.error
-    error_msg = f"Виникла помилка: {str(error)}"
-    print(error_msg)
+    print(f"Помилка: {str(error)}")
     if update:
-        await update.message.reply_text(error_msg)
+        await update.message.reply_text(f"Виникла помилка: {str(error)}")
 
 # Обробка посилань
 async def handle_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
     url = update.message.text
-    if "facebook.com" in url.lower():
-        await update.message.reply_text("Парсинг посилань із Facebook не підтримується через обмеження доступу.")
-        return
-    
     try:
-        title, text, image_url = parse_news(url)
-        post, img = prepare_post(title, text, image_url, url)
+        if "facebook.com" in url.lower():
+            title, text, image_url = parse_facebook_post(url)
+        else:
+            title, text, image_url = parse_web_news(url)
         
-        # Зберігаємо дані в контексті для подальшого використання
+        post, img = prepare_post(title, text, image_url, url)
         context.user_data['post'] = post
         context.user_data['image_url'] = img
         context.user_data['url'] = url
         
-        # Кнопки для підтвердження
         keyboard = [
             [InlineKeyboardButton("Опублікувати", callback_data="publish")],
             [InlineKeyboardButton("Переробити", callback_data="rework"),
@@ -130,8 +138,11 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     elif query.data == "rework":
         url = context.user_data.get('url')
-        title, text, image_url = parse_news(url)
-        new_post, img = prepare_post(title, text, image_url, url)  # Нова версія поста
+        if "facebook.com" in url.lower():
+            title, text, image_url = parse_facebook_post(url)
+        else:
+            title, text, image_url = parse_web_news(url)
+        new_post, img = prepare_post(title, text, image_url, url)
         context.user_data['post'] = new_post
         context.user_data['image_url'] = img
         
@@ -146,10 +157,10 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await query.edit_message_caption(caption=new_post, reply_markup=reply_markup)
         else:
             await query.edit_message_text(text=new_post, reply_markup=reply_markup)
-        await bot.send_message(chat_id=query.message.chat_id, text="Пропозицію перероблено. Перегляньте та виберіть дію.")
+        await bot.send_message(chat_id=query.message.chat_id, text="Пропозицію перероблено.")
     
     elif query.data == "edit":
-        await query.edit_message_text(text="Надішліть відредагований текст поста у відповідь на це повідомлення.")
+        await query.edit_message_text(text="Надішліть відредагований текст поста.")
         context.user_data['awaiting_edit'] = True
 
 # Обробка редагованого тексту
@@ -171,11 +182,11 @@ async def handle_edit(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await bot.send_photo(chat_id=update.effective_chat.id, photo=image_url, caption=edited_post, reply_markup=reply_markup)
         else:
             await bot.send_message(chat_id=update.effective_chat.id, text=edited_post, reply_markup=reply_markup)
-        await update.message.reply_text("Оновлений пост готовий. Виберіть дію.")
+        await update.message.reply_text("Оновлений пост готовий.")
 
 # Старт бота
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Надішли мені посилання на новину, і я підготую пост для @UA_Defence!")
+    await update.message.reply_text("Надішли мені посилання на новину (включаючи Facebook), і я підготую пост!")
 
 # Головна функція
 def main():
