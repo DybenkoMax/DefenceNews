@@ -30,21 +30,27 @@ def parse_web_news(url):
         
         soup = BeautifulSoup(response.text, 'html.parser')
         
-        # Витягуємо заголовок
-        title = soup.find('h1').text.strip() if soup.find('h1') else "Без заголовка"
+        # Витягуємо заголовок із <h1 class="entry-title">
+        title_tag = soup.find('h1', class_='entry-title')
+        title = title_tag.text.strip() if title_tag else "Без заголовка"
         
-        # Шукаємо основний контент статті (наприклад, у <article> або <div class="content">)
-        article = soup.find('article') or soup.find('div', class_=['content', 'article', 'post-content'])
-        if article:
-            paragraphs = article.find_all('p', recursive=False)  # Тільки прямі <p> у блоці
+        # Шукаємо основний контент у <div class="entry-content">
+        content = soup.find('div', class_='entry-content')
+        if content:
+            paragraphs = content.find_all('p', recursive=False)
+            text = " ".join(p.text.strip() for p in paragraphs if p.text.strip()) if paragraphs else "Текст відсутній"
         else:
-            paragraphs = soup.find_all('p')  # Усі <p>, якщо немає чіткого блоку
+            # Запасний варіант: усі <p> на сторінці
+            paragraphs = soup.find_all('p')
+            text = " ".join(p.text.strip() for p in paragraphs if p.text.strip()) if paragraphs else "Текст відсутній"
         
-        text = " ".join(p.text.strip() for p in paragraphs if p.text.strip()) if paragraphs else "Текст відсутній"
+        # Витягуємо зображення з <figure class="wp-block-image">
+        figure = soup.find('figure', class_='wp-block-image')
+        image_url = None
+        if figure:
+            image = figure.find('img')
+            image_url = image['src'] if image and 'src' in image.attrs else None
         
-        # Витягуємо перше зображення
-        image = soup.find('img')
-        image_url = image['src'] if image and 'src' in image.attrs else None
         if image_url:
             from urllib.parse import urljoin
             image_url = urljoin(url, image_url)
@@ -73,7 +79,6 @@ def analyze_content(title, text):
 # Функція для адаптації поста у стилі новинного каналу
 def prepare_post(title, text, image_url, url):
     analysis = analyze_content(title, text)
-    # Спеціальна стилістика
     post = (
         f"⚡️ ТЕРМІНОВО: {title.upper()} ⚡️\n\n"
         f"🔥 ЩО ВІДБУЛОСЯ: {text[:600]}... Читайте деталі за посиланням!\n\n"
