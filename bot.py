@@ -30,22 +30,22 @@ def parse_web_news(url):
         
         soup = BeautifulSoup(response.text, 'html.parser')
         
-        # Витягуємо заголовок із <h1 class="entry-title">
-        title_tag = soup.find('h1', class_='entry-title')
+        # Витягуємо заголовок із <h1> (без класу, якщо немає entry-title)
+        title_tag = soup.find('h1')
         title = title_tag.text.strip() if title_tag else "Без заголовка"
         
-        # Шукаємо основний контент у <div class="entry-content">
-        content = soup.find('div', class_='entry-content')
+        # Шукаємо основний контент у <div class="post-content"> або <div class="block-content">
+        content = soup.find('div', class_=['post-content', 'block-content', 'entry-content'])
         if content:
             paragraphs = content.find_all('p', recursive=False)
-            text = " ".join(p.text.strip() for p in paragraphs if p.text.strip()) if paragraphs else "Текст відсутній"
+            text = " ".join(p.text.strip() for p in paragraphs if p.text.strip() and "Медіакіт" not in p.text)
         else:
             # Запасний варіант: усі <p> на сторінці
             paragraphs = soup.find_all('p')
-            text = " ".join(p.text.strip() for p in paragraphs if p.text.strip()) if paragraphs else "Текст відсутній"
+            text = " ".join(p.text.strip() for p in paragraphs if p.text.strip() and "Медіакіт" not in p.text)
         
-        # Витягуємо зображення з <figure class="wp-block-image">
-        figure = soup.find('figure', class_='wp-block-image')
+        # Витягуємо зображення з <figure> або <div class="post-media">
+        figure = soup.find('figure') or soup.find('div', class_='post-media')
         image_url = None
         if figure:
             image = figure.find('img')
@@ -64,27 +64,13 @@ def parse_web_news(url):
     except Exception as e:
         raise Exception(f"Помилка парсингу сайту: {str(e)}")
 
-# Функція для аналізу та створення висновків
-def analyze_content(title, text):
-    analysis = ""
-    if any(keyword in title.lower() or keyword in text.lower() for keyword in ["війна", "конфлікт", "бойові дії"]):
-        analysis += "Тема стосується конфлікту. Перевірте факти та додайте контекст.\n"
-    if len(text) < 300:
-        analysis += "Текст короткий. Рекомендується розширити деталі.\n"
-    else:
-        analysis += "Текст ґрунтовний. Виділіть ключові моменти для читачів.\n"
-    analysis += "Погляд редакції: Подія вимагає уваги аудиторії та чіткого викладу."
-    return analysis
-
-# Функція для адаптації поста у стилі новинного каналу
+# Функція для адаптації поста у чистому стилі
 def prepare_post(title, text, image_url, url):
-    analysis = analyze_content(title, text)
     post = (
-        f"⚡️ ТЕРМІНОВО: {title.upper()} ⚡️\n\n"
-        f"🔥 ЩО ВІДБУЛОСЯ: {text[:600]}... Читайте деталі за посиланням!\n\n"
-        f"📌 НАШ ПОГЛЯД:\n{analysis}\n\n"
-        f"🌐 Джерело: {url}\n"
-        f"👉 Слідкуйте за новинами з @UA_Defence!"
+        f"{title.upper()}\n\n"
+        f"{text[:600]}... Читайте деталі за посиланням!\n\n"
+        f"Джерело: {url}\n"
+        f"Слідкуйте за новинами з @UA_Defence!"
     )
     return post, image_url
 
